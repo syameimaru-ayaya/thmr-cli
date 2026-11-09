@@ -48,8 +48,9 @@ STREAM_DOMESTIC="https://radio.zyghit.cn/radio/touhou/320k"
 STREAM_INTERNATIONAL="https://radio.yunmoan.cn/radio/touhou/320k"
 STREAM_URL="$STREAM_DOMESTIC"
 
+PLAYER_VERSION="1.1.0"
 CACHE_DIR="$HOME/.cache/thmr-cli"
-SWIFT_BIN="$CACHE_DIR/thmr-player-macos"
+SWIFT_BIN="$CACHE_DIR/thmr-player-macos-v${PLAYER_VERSION}"
 CTRL_SOCK="/tmp/thmr_ctrl_${UID}.sock"
 FIFO_PATH="/tmp/thmr_stream_${UID}.fifo"
 LOG_FILE=$(mktemp /tmp/thmr_radio_log.XXXXXX)
@@ -144,12 +145,24 @@ ensure_native_player() {
 import Foundation
 import AVFoundation
 
+extension Date {
+    func formattedTime() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: self)
+    }
+}
+
 final class RadioPlayer {
     let player: AVPlayer
     let socketPath: String
     let streamUrl: URL
     var serverFd: Int32 = -1
     var isRunning = true
+    
+    private var failCount = 0
+    private var lastPlayTimestamp: Date = Date()
+    private var isReconnecting = false
     
     init(url: URL, socketPath: String) {
         self.streamUrl = url
@@ -160,13 +173,52 @@ final class RadioPlayer {
         setupNotifications()
     }
     
+    private func logTerminal(_ text: String) {
+        let msg = "\r\u{001B}[K\(text)"
+        if let tty = fopen("/dev/tty", "w") {
+            fputs(msg, tty)
+            fclose(tty)
+        } else {
+            fputs(msg, stderr)
+        }
+    }
+    
+    private func triggerReconnect() {
+        guard isRunning && !isReconnecting else { return }
+        isReconnecting = true
+        
+        let now = Date().timeIntervalSince(lastPlayTimestamp)
+        if now >= 10.0 {
+            failCount = 0
+        }
+        failCount += 1
+        
+        if failCount >= 5 {
+            logTerminal("\u{001B}[1;31m[\(Date().formattedTime())] 连续重连失败达上限 (5/5)，停止重试。\u{001B}[0m\n")
+            exit(1)
+        }
+        
+        let delay: TimeInterval = 2.0
+        logTerminal("\u{001B}[1;33m[\(Date().formattedTime())] 网络中断，\(Int(delay))秒后尝试自动重连 (连续失败: \(failCount)/5)...\u{001B}[0m")
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self = self, self.isRunning else { return }
+            self.logTerminal("\u{001B}[1;34m[\(Date().formattedTime())] 正在重新连接音频流...\u{001B}[0m")
+            let newItem = AVPlayerItem(url: self.streamUrl)
+            self.player.replaceCurrentItem(with: newItem)
+            self.player.play()
+            self.isReconnecting = false
+        }
+    }
+    
     private func setupNotifications() {
         NotificationCenter.default.addObserver(
             forName: AVPlayerItem.playbackStalledNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.player.play()
+            guard let self = self, self.isRunning else { return }
+            self.player.play()
         }
         
         NotificationCenter.default.addObserver(
@@ -174,15 +226,22 @@ final class RadioPlayer {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self = self else { return }
-            self.player.replaceCurrentItem(with: AVPlayerItem(url: self.streamUrl))
-            self.player.play()
+            self?.triggerReconnect()
         }
     }
     
     func start() {
         setupSocket()
         player.play()
+        
+        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self = self, self.isRunning else { return }
+            if self.player.timeControlStatus == .playing {
+                self.lastPlayTimestamp = Date()
+            } else if let item = self.player.currentItem, item.status == .failed {
+                self.triggerReconnect()
+            }
+        }
         
         let sockQueue = DispatchQueue(label: "com.thmr.socket", qos: .userInitiated)
         sockQueue.async { [weak self] in
@@ -516,7 +575,9 @@ else
                 echo -e "\n[$(date '+%H:%M:%S')] 连续拉流失败达到上限，停止重连。" >> "$LOG_FILE"
                 break
             fi
+            echo -e "\r\033[K\033[1;33m[$(date '+%H:%M:%S')] 网络中断，${retry_delay}秒后尝试自动重连 (连续失败: ${fail_count}/5)...\033[0m" >&2
             sleep "$retry_delay"
+            echo -e "\r\033[K\033[1;34m[$(date '+%H:%M:%S')] 正在重新连接音频流...\033[0m" >&2
         done
     }
     curl_fetcher &
