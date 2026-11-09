@@ -328,21 +328,25 @@ CURL_PID=$!
 # ----------------- 6. 启动 VLC 并挂载 UNIX 控制套接字与可选 MPRIS -----------------
 VLC_BIN=cvlc
 command -v cvlc >/dev/null 2>&1 || VLC_BIN=vlc
-VLC_EXTRAINTF=oldrc
 
-# MPRIS 使用当前用户的会话总线；缺少工具、模块或总线时保持终端播放
+# MPRIS 使用当前用户的会话总线；缺少工具、模块或总线时显式关闭
+ENABLE_MPRIS=0
+VLC_MPRIS_ARGS=("--no-dbus")
 if command -v dbus-send >/dev/null 2>&1 &&
    dbus-send --session --print-reply --reply-timeout=1000 \
        --dest=org.freedesktop.DBus /org/freedesktop/DBus \
        org.freedesktop.DBus.ListNames >/dev/null 2>&1 &&
    "$VLC_BIN" --list 2>/dev/null | grep -q '^[[:space:]]*dbus[[:space:]]'; then
-    VLC_EXTRAINTF=oldrc:dbus
+    ENABLE_MPRIS=1
+    # VLC 在 Linux 下默认会自动加载一次 dbus 模块，切勿再传 --control dbus 或 oldrc:dbus，否则会导致注册两份 MPRIS 服务
+    VLC_MPRIS_ARGS=()
 fi
 
 # 注意：VLC 3.x 下旧版 RC 接口名为 oldrc，且需要 --rc-fake-tty 避免无输入时退出
 "$VLC_BIN" -q -I dummy \
      --no-one-instance \
-     --extraintf "$VLC_EXTRAINTF" \
+     "${VLC_MPRIS_ARGS[@]}" \
+     --extraintf oldrc \
      --rc-unix "$VLC_SOCK" \
      --rc-fake-tty \
      --no-video \
@@ -363,7 +367,7 @@ fi
 
 # VLC 名称可能已被其他实例占用，按进程 ID 确认本次启动的播放器
 MPRIS_PLAYER=""
-if [[ "$VLC_EXTRAINTF" == oldrc:dbus ]]; then
+if [[ $ENABLE_MPRIS -eq 1 ]]; then
     for ((i = 0; i < 30; i++)); do
         for name in org.mpris.MediaPlayer2.vlc "org.mpris.MediaPlayer2.vlc.instance${VLC_PID}"; do
             owner=$(dbus-send --session --print-reply --reply-timeout=1000 \
