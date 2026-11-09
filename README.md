@@ -2,12 +2,12 @@
 
 # thmr-cli
 
-**适用于 [THMR 东方音乐电台 (thmr-app)](https://github.com/Yunmoan/thmr-app) 的 Linux 命令行轻量级流媒体播放端**
+**适用于 [THMR 东方音乐电台 (thmr-app)](https://github.com/Yunmoan/thmr-app) 的 Linux & macOS 命令行轻量级流媒体播放端**
 
-**A lightweight Linux command-line streaming client for [Touhou Music Radio (thmr-app)](https://github.com/Yunmoan/thmr-app)**
+**A lightweight Linux & macOS command-line streaming client for [Touhou Music Radio (thmr-app)](https://github.com/Yunmoan/thmr-app)**
 
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Linux-FCC624?logo=linux&logoColor=black)](#)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-FCC624?logo=apple&logoColor=black)](#)
 [![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?logo=gnu-bash&logoColor=white)](#)
 [![Radio](https://img.shields.io/badge/Radio-THMR-ff69b4)](#)
 
@@ -97,13 +97,21 @@ cd thmr-cli
 #### 2. 赋予脚本执行权限
 
 ```bash
+# Linux
 chmod +x thmr-cli-linux.sh
+
+# macOS
+chmod +x thmr-cli-macos.sh
 ```
 
 #### 3. 运行客户端（⚠️ 请勿加 sudo）
 
 ```bash
+# Linux
 ./thmr-cli-linux.sh
+
+# macOS (零外部依赖，自动调用原生 AVPlayer 硬件解码)
+./thmr-cli-macos.sh
 ```
 
 ---
@@ -128,8 +136,10 @@ chmod +x thmr-cli-linux.sh
 
 | 按键 | 功能 | 说明 |
 | :---: | :--- | :--- |
-| `+` 或 `=` | **音量增加** | 音量单次递增 2% |
-| `-` 或 `_` | **音量减少** | 音量单次递减 2% |
+| `+` 或 `=` | **音量增加** | 音量单次递增 5%（Linux 为 +2）并提供动态音量条 |
+| `-` 或 `_` | **音量减少** | 音量单次递减 5%（Linux 为 -2）并提供动态音量条 |
+| `Space` 或 `p` | **暂停/恢复** | 临时暂停或继续音频流播放 (macOS 专属) |
+| `m` 或 `M` | **静音切换** | 快速开启/关闭声音静音 (macOS 专属) |
 | `q` 或 `Q` | **优雅退出** | 停止播放并自动回收所有子进程与临时资源 |
 | `Ctrl + C` | **强制中断** | 触发安全清理钩子并立即退出 |
 

@@ -2,10 +2,10 @@
 
 # thmr-cli
 
-**A lightweight Linux command-line streaming client for [Touhou Music Radio (thmr-app)](https://github.com/Yunmoan/thmr-app)**
+**A lightweight Linux & macOS command-line streaming client for [Touhou Music Radio (thmr-app)](https://github.com/Yunmoan/thmr-app)**
 
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Linux-FCC624?logo=linux&logoColor=black)](#)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-FCC624?logo=apple&logoColor=black)](#)
 [![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?logo=gnu-bash&logoColor=white)](#)
 [![Radio](https://img.shields.io/badge/Radio-THMR-ff69b4)](#)
 
@@ -93,13 +93,21 @@ cd thmr-cli
 #### 2. Make the script executable
 
 ```bash
+# Linux
 chmod +x thmr-cli-linux.sh
+
+# macOS
+chmod +x thmr-cli-macos.sh
 ```
 
 #### 3. Launch (⚠️ Do NOT run as root or with sudo)
 
 ```bash
+# Linux
 ./thmr-cli-linux.sh
+
+# macOS (Zero external dependencies, native AVPlayer acceleration)
+./thmr-cli-macos.sh
 ```
 
 ---
@@ -124,8 +132,10 @@ Once the stream starts, control playback directly in the terminal (**no Enter ke
 
 | Key | Action | Description |
 | :---: | :--- | :--- |
-| `+` or `=` | **Volume Up** | Increases volume by +2% |
-| `-` or `_` | **Volume Down** | Decreases volume by -2% |
+| `+` or `=` | **Volume Up** | Increases volume (+5% with visual volume bar on macOS; +2% on Linux) |
+| `-` or `_` | **Volume Down** | Decreases volume (-5% with visual volume bar on macOS; -2% on Linux) |
+| `Space` or `p` | **Pause / Resume** | Toggle playback pause/resume (macOS exclusive) |
+| `m` or `M` | **Mute Toggle** | Toggle audio mute (macOS exclusive) |
 | `q` or `Q` | **Graceful Quit** | Terminates streaming and cleans up all processes |
 | `Ctrl + C` | **Force Interruption** | Safely triggers cleanup trap and exits |
 
