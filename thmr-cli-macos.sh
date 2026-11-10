@@ -63,22 +63,28 @@ STATUS_FETCHER_PID=""
 
 # 预先生成轻量 JXA JSON 解析器脚本（零外部依赖，毫秒级解析）
 cat << 'EOF' > "$STATUS_SCRIPT"
-var fs = $.NSFileManager.defaultManager;
-var path = ObjC.unwrap($.NSProcessInfo.processInfo.arguments.objectAtIndex(4));
-var data = fs.contentsAtPath(path);
-if (data) {
+function run(argv) {
+    var path = argv[0];
+    var fs = $.NSFileManager.defaultManager;
+    var data = fs.contentsAtPath(path);
+    if (!data) return "";
     var str = $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js;
     try {
         var d = JSON.parse(str);
         var cur = d.current || {};
+        var prev = d.previous || {};
         var artist = cur.artist || "未知艺术家";
         var title = cur.title || "未知曲目";
         var startedAt = cur.startedAtMs || 0;
         var duration = cur.durationSec || 0;
         var listeners = (d.totals && d.totals.listeners) != null ? d.totals.listeners : 0;
-        artist + "\t" + title + "\t" + startedAt + "\t" + duration + "\t" + listeners;
-    } catch(e) { "" }
-} else { "" }
+        var prevArtist = prev.artist || "";
+        var prevTitle = prev.title || "";
+        return [artist, title, startedAt, duration, listeners, prevArtist, prevTitle].join("\t");
+    } catch(e) {
+        return "";
+    }
+}
 EOF
 
 # ----------------- 1. 播放引擎探测 (方案1: 原生 AVPlayer / 备选: VLC) -----------------
@@ -456,28 +462,36 @@ trap cleanup INT TERM EXIT
 # 执行引擎探测
 detect_engine
 
-# ----------------- 4. 启动前交互式配置 (频道、音频源 & IP协议) -----------------
+# ----------------- 4. 启动前交互式配置 (频道、音频源、码率 & IP协议) -----------------
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
-    echo "用法: $0 [频道 1/2] [音频源 1/2] [网络协议 1/2/3]"
+    echo "用法: $0 [频道 1/2] [音频源 1/2] [码率 1/2/3] [网络协议 1/2/3]"
     echo "  频道:   1 = 东方综合主频道 (默认 · 13万首全量随机)"
     echo "          2 = 东方综合精选频道 (500+首人工精选)"
     echo "  音频源: 1 = 国内音频源 (默认), 2 = 国际音频源"
+    echo "  码率:   1 = 320 kbps (默认 · 极高音质), 2 = 128 kbps, 3 = 96 kbps"
     echo "  协议:   1 = 强制 IPv4, 2 = 强制 IPv6, 3 = 自动双栈 (默认)"
     echo "示例:"
-    echo "  $0            # 全交互式引导启动"
-    echo "  $0 1 1 3      # 主频道 + 国内源 + 自动双栈 (快速启动)"
-    echo "  $0 2 1 3      # 精选频道 + 国内源 + 自动双栈 (快速启动)"
+    echo "  $0                # 全交互式引导启动"
+    echo "  $0 1 1 1 3        # 主频道 + 国内源 + 320k + 自动双栈 (快速启动)"
+    echo "  $0 2 1 2 3        # 精选频道 + 国内源 + 128k + 自动双栈"
     exit 0
 fi
 
-# 参数兼容：支持 3 参数、2 参数或无参数交互
-if [[ $# -ge 3 ]]; then
+# 参数兼容：支持 4 参数、3 参数、2 参数或无参数交互
+if [[ $# -ge 4 ]]; then
     CHANNEL_CHOICE="$1"
     SOURCE_CHOICE="$2"
+    BITRATE_CHOICE="$3"
+    USER_CHOICE="$4"
+elif [[ $# -eq 3 ]]; then
+    CHANNEL_CHOICE="$1"
+    SOURCE_CHOICE="$2"
+    BITRATE_CHOICE=1
     USER_CHOICE="$3"
 elif [[ $# -eq 2 ]]; then
     CHANNEL_CHOICE=1
     SOURCE_CHOICE="$1"
+    BITRATE_CHOICE=1
     USER_CHOICE="$2"
 else
     clear
@@ -485,7 +499,7 @@ else
     echo "       THMR东方网络电台流媒体播放端 (macOS 原生版)   "
     echo "         Maintainer: syameimaru-ayaya         "
     echo "=================================================="
-    echo "步骤 1/3：请选择播放电台频道："
+    echo "步骤 1/4：请选择播放电台频道："
     echo "  1) 东方音乐电台 (主频道) [全量随机 · 130,000+ 首曲目]"
     echo "  2) 东方音乐电台 (精选频道) [人工精选 · 500+ 首优质同人曲]"
     echo "--------------------------------------------------"
@@ -510,14 +524,12 @@ case "$CHANNEL_CHOICE" in
         ;;
 esac
 
-STREAM_DOMESTIC="https://radio.zyghit.cn/radio/${STATION_ID}/320k"
-STREAM_INTERNATIONAL="https://radio.yunmoan.cn/radio/${STATION_ID}/320k"
 API_STATUS_URL="${API_BASE}/api/stations/${STATION_ID}/status"
 
 if [[ -z "$SOURCE_CHOICE" ]]; then
     echo -e "\n已选定频道: \033[1;35m$STATION_NAME ($STATION_ID)\033[0m"
     echo "--------------------------------------------------"
-    echo "步骤 2/3：请选择音频源线路："
+    echo "步骤 2/4：请选择音频源线路："
     echo "  1) 国内音频源 (radio.zyghit.cn) [低延迟，国内推荐]"
     echo "  2) 国际音频源 (radio.yunmoan.cn) [海外优质节点]"
     echo "--------------------------------------------------"
@@ -533,19 +545,54 @@ fi
 
 case "$SOURCE_CHOICE" in
     2)
-        STREAM_URL="$STREAM_INTERNATIONAL"
+        SOURCE_HOST="https://radio.yunmoan.cn"
         SOURCE_NAME="国际音频源 (yunmoan.cn)"
         ;;
     *)
-        STREAM_URL="$STREAM_DOMESTIC"
+        SOURCE_HOST="https://radio.zyghit.cn"
         SOURCE_NAME="国内音频源 (zyghit.cn)"
         ;;
 esac
 
-if [[ -z "$USER_CHOICE" ]]; then
+if [[ -z "$BITRATE_CHOICE" ]]; then
     echo -e "\n已选定音频源: \033[1;32m$SOURCE_NAME\033[0m"
     echo "--------------------------------------------------"
-    echo "步骤 3/3：请选择拉流的网络协议："
+    echo "步骤 3/4：请选择音频码率档案："
+    echo "  1) 320 kbps [极高音质，默认推荐]"
+    echo "  2) 128 kbps [标准音质，节省流量]"
+    echo "  3) 96 kbps  [轻量低码率，弱网/校园网防卡顿]"
+    echo "--------------------------------------------------"
+
+    if [ -t 0 ]; then
+        read -rp "请输入选项 [1/2/3，直接回车默认选 1]: " BITRATE_CHOICE
+    elif [ -r /dev/tty ] && [ -t 1 ]; then
+        read -rp "请输入选项 [1/2/3，直接回车默认选 1]: " BITRATE_CHOICE < /dev/tty
+    else
+        BITRATE_CHOICE=1
+    fi
+fi
+
+case "$BITRATE_CHOICE" in
+    2)
+        PROFILE_ID="128k"
+        PROFILE_NAME="128 kbps (标准音质)"
+        ;;
+    3)
+        PROFILE_ID="96k"
+        PROFILE_NAME="96 kbps (轻量弱网)"
+        ;;
+    *)
+        PROFILE_ID="320k"
+        PROFILE_NAME="320 kbps (极高音质)"
+        ;;
+esac
+
+STREAM_URL="${SOURCE_HOST}/radio/${STATION_ID}/${PROFILE_ID}"
+
+if [[ -z "$USER_CHOICE" ]]; then
+    echo -e "\n已选定音质: \033[1;33m$PROFILE_NAME\033[0m"
+    echo "--------------------------------------------------"
+    echo "步骤 4/4：请选择拉流的网络协议："
     echo "  1) 强制 IPv4 (-4)"
     echo "  2) 强制 IPv6 (-6)"
     echo "  3) 自动双栈 (由系统调度)"
@@ -577,6 +624,7 @@ esac
 
 echo -e "\n已选定配置:"
 echo -e "  频道: \033[1;35m$STATION_NAME ($STATION_ID)\033[0m"
+echo -e "  音质: \033[1;33m$PROFILE_NAME\033[0m"
 echo -e "  线路: \033[1;32m$SOURCE_NAME\033[0m | 模式: \033[1;32m$IP_NAME\033[0m"
 if [[ "$PLAYER_BACKEND" == "native" ]]; then
     echo -e "  引擎: \033[1;36mmacOS 原生 AVPlayer 引擎 (方案1 - 零外部依赖)\033[0m"
@@ -587,7 +635,8 @@ echo "=================================================="
 echo "操作提示："
 echo "  [+] / [=] 增加音量    [-] / [_] 降低音量"
 echo "  [Space] / [p] 暂停/播放  [m] 静音切换"
-echo "  [f] / [r] 曲目反馈    [q] 退出播放"
+echo "  [h] 上一曲/历史查询    [f] / [r] 曲目反馈"
+echo "  [q] 退出播放          [Ctrl+C] 强制退出"
 echo "=================================================="
 
 # ----------------- 5. 启动播放引擎与后台状态监控 -----------------
@@ -782,6 +831,54 @@ handle_feedback() {
     sleep 2
 }
 
+PREV_TRACK=""
+CUR_ARTIST=""
+CUR_TITLE=""
+LAST_SEEN_TITLE=""
+SESSION_HISTORY=()
+SHOW_HISTORY_UNTIL=0
+
+show_history() {
+    tput cnorm 2>/dev/null
+    if [[ -z "$CUR_TITLE" && -f "$STATUS_FILE" && -s "$STATUS_FILE" ]]; then
+        IFS=$'\t' read -r s_artist s_title _ _ _ s_prev_artist s_prev_title < "$STATUS_FILE"
+        if [[ -n "$s_title" ]]; then
+            CUR_ARTIST="$s_artist"
+            CUR_TITLE="$s_title"
+            if [[ -n "$s_prev_title" ]]; then
+                if [[ -n "$s_prev_artist" ]]; then
+                    PREV_TRACK="${s_prev_artist} - ${s_prev_title}"
+                else
+                    PREV_TRACK="${s_prev_title}"
+                fi
+            fi
+        fi
+    fi
+    echo -e "\n"
+    echo "=================================================="
+    echo -e "\033[1;36m【曲目回溯与历史播放记录】\033[0m"
+    if [[ -n "$PREV_TRACK" && "$PREV_TRACK" != " -" && "$PREV_TRACK" != "-" ]]; then
+        echo -e "  \033[1;33m⏮️ 上一首播放:\033[0m $PREV_TRACK"
+    else
+        echo -e "  \033[1;33m⏮️ 上一首播放:\033[0m 暂无上一曲数据 (电台刚启动或无历史)"
+    fi
+    echo -e "  \033[1;32m▶️ 当前正在播:\033[0m ${CUR_ARTIST:-未知} - ${CUR_TITLE:-未知}"
+
+    if [[ ${#SESSION_HISTORY[@]} -gt 0 ]]; then
+        echo "--------------------------------------------------"
+        echo -e "\033[1;34m📜 本次收听历史 (按时间倒序):\033[0m"
+        local idx=1
+        for ((i = ${#SESSION_HISTORY[@]} - 1; i >= 0; i--)); do
+            echo -e "  ${idx}. ${SESSION_HISTORY[i]}"
+            ((idx++))
+            [[ $idx -gt 5 ]] && break
+        done
+    fi
+    echo "=================================================="
+    echo -e "\033[0;37m(提示: 3 秒后自动恢复进度条刷新，或按任意键继续)\033[0m"
+    SHOW_HISTORY_UNTIL=$(( $(date +%s) + 3 ))
+}
+
 if [[ "$PLAYER_BACKEND" == "native" ]]; then
     # --- 启动 macOS 原生 AVPlayer 引擎 ---
     ensure_native_player
@@ -950,6 +1047,9 @@ while true; do
                     fi
                 fi
                 ;;
+            h|H)
+                show_history
+                ;;
             f|F|r|R)
                 handle_feedback
                 ;;
@@ -957,15 +1057,36 @@ while true; do
                 echo -e "\n\033[1;33m用户请求退出...\033[0m"
                 break
                 ;;
+            *)
+                if [[ $SHOW_HISTORY_UNTIL -gt 0 ]]; then
+                    SHOW_HISTORY_UNTIL=0
+                fi
+                ;;
         esac
     fi
 
-    # 实时刷新曲目元数据与进度条 (当未在调节音量、且未处于暂停/静音提示状态时)
+    # 实时刷新曲目元数据与进度条 (当未在调节音量、未在回溯历史、且未处于暂停/静音提示状态时)
     now_epoch=$(date +%s)
-    if [[ $now_epoch -ge $SHOW_VOL_UNTIL && $IS_PAUSED -eq 0 && $IS_MUTED -eq 0 ]]; then
+    if [[ $now_epoch -ge $SHOW_VOL_UNTIL && $now_epoch -ge $SHOW_HISTORY_UNTIL && $IS_PAUSED -eq 0 && $IS_MUTED -eq 0 ]]; then
         if [[ -f "$STATUS_FILE" && -s "$STATUS_FILE" ]]; then
-            IFS=$'\t' read -r cur_artist cur_title cur_started_ms cur_dur cur_listeners < "$STATUS_FILE"
+            IFS=$'\t' read -r cur_artist cur_title cur_started_ms cur_dur cur_listeners prev_artist prev_title < "$STATUS_FILE"
             if [[ -n "$cur_title" && "$cur_title" != "未知曲目" ]]; then
+                CUR_ARTIST="$cur_artist"
+                CUR_TITLE="$cur_title"
+                if [[ -n "$prev_title" ]]; then
+                    if [[ -n "$prev_artist" ]]; then
+                        PREV_TRACK="${prev_artist} - ${prev_title}"
+                    else
+                        PREV_TRACK="${prev_title}"
+                    fi
+                fi
+                if [[ "$cur_title" != "$LAST_SEEN_TITLE" ]]; then
+                    LAST_SEEN_TITLE="$cur_title"
+                    SESSION_HISTORY+=("[$(date '+%H:%M')] ${cur_artist} - ${cur_title}")
+                    if [[ ${#SESSION_HISTORY[@]} -gt 10 ]]; then
+                        SESSION_HISTORY=("${SESSION_HISTORY[@]:1}")
+                    fi
+                fi
                 started_sec=$((cur_started_ms / 1000))
                 pos=$((now_epoch - started_sec))
                 [[ $pos -lt 0 ]] && pos=0
