@@ -622,22 +622,32 @@ case "$USER_CHOICE" in
         ;;
 esac
 
-echo -e "\n已选定配置:"
-echo -e "  频道: \033[1;35m$STATION_NAME ($STATION_ID)\033[0m"
-echo -e "  音质: \033[1;33m$PROFILE_NAME\033[0m"
-echo -e "  线路: \033[1;32m$SOURCE_NAME\033[0m | 模式: \033[1;32m$IP_NAME\033[0m"
-if [[ "$PLAYER_BACKEND" == "native" ]]; then
-    echo -e "  引擎: \033[1;36mmacOS 原生 AVPlayer 引擎 (方案1 - 零外部依赖)\033[0m"
-else
-    echo -e "  引擎: \033[1;36mVLC 引擎 ($VLC_BIN)\033[0m"
-fi
-echo "=================================================="
-echo "操作提示："
-echo "  [+] / [=] 增加音量    [-] / [_] 降低音量"
-echo "  [Space] / [p] 暂停/播放  [m] 静音切换"
-echo "  [h] 上一曲/历史查询    [f] / [r] 曲目反馈"
-echo "  [q] 退出播放          [Ctrl+C] 强制退出"
-echo "=================================================="
+render_main_header() {
+    clear
+    echo "=================================================="
+    echo "       THMR东方网络电台流媒体播放端 (macOS 原生版)   "
+    echo "         Maintainer: syameimaru-ayaya         "
+    echo "=================================================="
+    echo -e "  频道: \033[1;35m$STATION_NAME ($STATION_ID)\033[0m"
+    echo -e "  音质: \033[1;33m$PROFILE_NAME\033[0m"
+    echo -e "  线路: \033[1;32m$SOURCE_NAME\033[0m | 模式: \033[1;32m$IP_NAME\033[0m"
+    if [[ "$PLAYER_BACKEND" == "native" ]]; then
+        echo -e "  引擎: \033[1;36mmacOS 原生 AVPlayer 引擎 (方案1 - 零外部依赖)\033[0m"
+    else
+        echo -e "  引擎: \033[1;36mVLC 引擎 ($VLC_BIN)\033[0m"
+    fi
+    echo "=================================================="
+    echo "操作提示："
+    echo "  [+] / [=] 增加音量    [-] / [_] 降低音量"
+    echo "  [Space] / [p] 暂停/播放  [m] 静音切换"
+    echo "  [h] 上一曲/历史查询    [f] / [r] 曲目反馈"
+    echo "  [q] 退出播放          [Ctrl+C] 强制退出"
+    echo "=================================================="
+    echo ""
+    tput civis 2>/dev/null
+}
+
+render_main_header
 
 # ----------------- 5. 启动播放引擎与后台状态监控 -----------------
 rm -f "$CTRL_SOCK" "$FIFO_PATH"
@@ -699,14 +709,17 @@ CONTACT_CACHE_FILE="$CACHE_DIR/contact"
 
 handle_feedback() {
     tput cnorm 2>/dev/null
-    echo -e "\n"
+    clear
+    echo "=================================================="
+    echo "       THMR 东方音乐电台 - 曲目问题反馈              "
     echo "=================================================="
     local track_info="当前播放曲目"
     if [[ -f "$STATUS_FILE" && -s "$STATUS_FILE" ]]; then
         IFS=$'\t' read -r cur_artist cur_title _ _ _ < "$STATUS_FILE"
         [[ -n "$cur_title" && "$cur_title" != "未知曲目" ]] && track_info="${cur_artist} - ${cur_title}"
     fi
-    echo -e "\033[1;36m[曲目反馈]\033[0m 当前曲目: \033[1;35m${track_info}\033[0m"
+    echo -e "当前曲目: \033[1;35m${track_info}\033[0m"
+    echo "--------------------------------------------------"
     echo "请选择反馈问题类型："
     echo "  1) 非东方歌曲 (non-touhou)"
     echo "  2) 音频损坏 / 播放异常 (playback)"
@@ -737,13 +750,15 @@ handle_feedback() {
         5) fb_type="violation" ;;
         6) fb_type="other" ;;
         0|q|Q)
-            echo -e "\033[1;33m已取消反馈，继续播放。\033[0m"
+            echo -e "\033[1;33m已取消反馈，正在返回主界面...\033[0m"
             sleep 1
+            render_main_header
             return 0
             ;;
         *)
-            echo -e "\033[1;31m输入无效，已取消反馈。\033[0m"
+            echo -e "\033[1;31m输入无效，已取消反馈，正在返回主界面...\033[0m"
             sleep 1
+            render_main_header
             return 0
             ;;
     esac
@@ -827,8 +842,9 @@ handle_feedback() {
     fi
 
     echo "--------------------------------------------------"
-    echo -e "正在恢复播放显示...\n"
+    echo -e "正在返回主播放界面..."
     sleep 2
+    render_main_header
 }
 
 PREV_TRACK=""
@@ -836,7 +852,6 @@ CUR_ARTIST=""
 CUR_TITLE=""
 LAST_SEEN_TITLE=""
 SESSION_HISTORY=()
-SHOW_HISTORY_UNTIL=0
 
 show_history() {
     tput cnorm 2>/dev/null
@@ -854,9 +869,11 @@ show_history() {
             fi
         fi
     fi
-    echo -e "\n"
+
+    clear
     echo "=================================================="
-    echo -e "\033[1;36m【曲目回溯与历史播放记录】\033[0m"
+    echo "       THMR 东方音乐电台 - 曲目回溯与历史播放记录     "
+    echo "=================================================="
     if [[ -n "$PREV_TRACK" && "$PREV_TRACK" != " -" && "$PREV_TRACK" != "-" ]]; then
         echo -e "  \033[1;33m⏮️ 上一首播放:\033[0m $PREV_TRACK"
     else
@@ -871,25 +888,35 @@ show_history() {
         for ((i = ${#SESSION_HISTORY[@]} - 1; i >= 0; i--)); do
             echo -e "  ${idx}. ${SESSION_HISTORY[i]}"
             ((idx++))
-            [[ $idx -gt 5 ]] && break
+            [[ $idx -gt 10 ]] && break
         done
     fi
     echo "=================================================="
-    echo -e "\033[0;37m(提示: 3 秒后自动恢复进度条刷新，或按任意键继续)\033[0m"
-    SHOW_HISTORY_UNTIL=$(( $(date +%s) + 3 ))
+    echo -e "\033[0;37m按任意键返回主界面 (或等待 5 秒自动返回)...\033[0m"
+
+    local dummy=""
+    if [ -t 0 ]; then
+        read -r -s -n 1 -t 5 dummy
+    elif [ -r /dev/tty ]; then
+        read -r -s -n 1 -t 5 dummy < /dev/tty
+    else
+        sleep 5
+    fi
+
+    render_main_header
 }
 
 if [[ "$PLAYER_BACKEND" == "native" ]]; then
     # --- 启动 macOS 原生 AVPlayer 引擎 ---
     ensure_native_player
-    echo -e "\033[1;34m[$(date '+%H:%M:%S')] 正在通过原生 AVPlayer 连接音频流...\033[0m"
+    echo -ne "\r\033[K\033[1;34m[$(date '+%H:%M:%S')] 正在通过原生 AVPlayer 连接音频流...\033[0m"
 
     "$SWIFT_BIN" "$STREAM_URL" "$CTRL_SOCK" >"$LOG_FILE" 2>&1 &
     PLAYER_PID=$!
 
 else
     # --- 启动 VLC 引擎 (完美兼容 /Applications/VLC.app) ---
-    echo -e "\033[1;34m[$(date '+%H:%M:%S')] 正在通过 VLC 连接音频流...\033[0m"
+    echo -ne "\r\033[K\033[1;34m[$(date '+%H:%M:%S')] 正在通过 VLC 连接音频流...\033[0m"
     mkfifo "$FIFO_PATH"
     exec 3<> "$FIFO_PATH"
 
@@ -943,7 +970,7 @@ if [[ ! -S "$CTRL_SOCK" ]]; then
     cleanup
 fi
 
-echo -e "\033[1;32m[$(date '+%H:%M:%S')] 播放已就绪，正在获取当前曲目信息...\033[0m\n"
+echo -ne "\r\033[K\033[1;32m[$(date '+%H:%M:%S')] 播放已就绪，正在获取当前曲目信息...\033[0m"
 
 # ----------------- 6. 启动后台曲目状态轮询进程 -----------------
 status_fetcher() {
@@ -1057,18 +1084,17 @@ while true; do
                 echo -e "\n\033[1;33m用户请求退出...\033[0m"
                 break
                 ;;
-            *)
-                if [[ $SHOW_HISTORY_UNTIL -gt 0 ]]; then
-                    SHOW_HISTORY_UNTIL=0
-                fi
-                ;;
         esac
     fi
 
-    # 实时刷新曲目元数据与进度条 (当未在调节音量、未在回溯历史、且未处于暂停/静音提示状态时)
+    # 实时刷新曲目元数据与进度条 (当未在调节音量时)
     now_epoch=$(date +%s)
-    if [[ $now_epoch -ge $SHOW_VOL_UNTIL && $now_epoch -ge $SHOW_HISTORY_UNTIL && $IS_PAUSED -eq 0 && $IS_MUTED -eq 0 ]]; then
-        if [[ -f "$STATUS_FILE" && -s "$STATUS_FILE" ]]; then
+    if [[ $now_epoch -ge $SHOW_VOL_UNTIL ]]; then
+        if [[ $IS_PAUSED -eq 1 ]]; then
+            echo -ne "\r\033[K\033[1;33m[$(date '+%H:%M:%S')] ⏸ 播放已暂停 (按 Space 或 P 恢复)\033[0m"
+        elif [[ $IS_MUTED -eq 1 ]]; then
+            echo -ne "\r\033[K\033[1;31m[$(date '+%H:%M:%S')] 🔇 已静音 (按 M 恢复)\033[0m"
+        elif [[ -f "$STATUS_FILE" && -s "$STATUS_FILE" ]]; then
             IFS=$'\t' read -r cur_artist cur_title cur_started_ms cur_dur cur_listeners prev_artist prev_title < "$STATUS_FILE"
             if [[ -n "$cur_title" && "$cur_title" != "未知曲目" ]]; then
                 CUR_ARTIST="$cur_artist"
