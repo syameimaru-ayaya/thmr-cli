@@ -116,15 +116,24 @@ chmod +x thmr-cli-macos.sh
 
 When prompted upon startup:
 
-1. **Select Streaming Source**:
+1. **Select Radio Channel** *(macOS)*:
+   - `1`: Touhou Main Channel (`touhou`) [Full random · 130,000+ tracks]
+   - `2`: Touhou Curated Channel (`touhou-curated`) [Hand-picked · 500+ tracks]
+   - *(Press Enter to select `1` by default)*
+2. **Select Streaming Route**:
    - `1`: Domestic Server (`radio.zyghit.cn`) [Recommended for Mainland China]
    - `2`: International Server (`radio.yunmoan.cn`) [Global node]
    - *(Press Enter to select `1` by default)*
-2. **Select IP Protocol**:
+3. **Select IP Protocol**:
    - `1`: Force IPv4 (`-4`)
    - `2`: Force IPv6 (`-6`)
    - `3`: Dual-Stack (Auto)
    - *(Press Enter to select `3` by default)*
+
+> [!TIP]
+> **macOS Quick Launch**: Arguments can be passed directly to skip interactive prompts:
+> - `./thmr-cli-macos.sh 1 1 3` (Main station + Domestic source + Dual-Stack)
+> - `./thmr-cli-macos.sh 2 1 3` (Curated station + Domestic source + Dual-Stack)
 
 #### Hotkeys during Playback
 

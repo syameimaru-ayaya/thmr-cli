@@ -44,21 +44,42 @@ if [[ $EUID -eq 0 ]]; then
     exit 1
 fi
 
-STREAM_DOMESTIC="https://radio.zyghit.cn/radio/touhou/320k"
-STREAM_INTERNATIONAL="https://radio.yunmoan.cn/radio/touhou/320k"
-STREAM_URL="$STREAM_DOMESTIC"
-
-PLAYER_VERSION="1.1.0"
+API_BASE="https://radio.yunmoan.cn"
+PLAYER_VERSION="1.2.0"
 CACHE_DIR="$HOME/.cache/thmr-cli"
 SWIFT_BIN="$CACHE_DIR/thmr-player-macos-v${PLAYER_VERSION}"
 CTRL_SOCK="/tmp/thmr_ctrl_${UID}.sock"
 FIFO_PATH="/tmp/thmr_stream_${UID}.fifo"
 LOG_FILE=$(mktemp /tmp/thmr_radio_log.XXXXXX)
+STATUS_FILE=$(mktemp /tmp/thmr_status.XXXXXX)
+STATUS_RAW=$(mktemp /tmp/thmr_raw.XXXXXX)
+STATUS_SCRIPT=$(mktemp /tmp/thmr_parser.XXXXXX)
 
 PLAYER_BACKEND=""   # "native" 或 "vlc"
 VLC_BIN=""
 PLAYER_PID=""
 CURL_PID=""
+STATUS_FETCHER_PID=""
+
+# 预先生成轻量 JXA JSON 解析器脚本（零外部依赖，毫秒级解析）
+cat << 'EOF' > "$STATUS_SCRIPT"
+var fs = $.NSFileManager.defaultManager;
+var path = ObjC.unwrap($.NSProcessInfo.processInfo.arguments.objectAtIndex(4));
+var data = fs.contentsAtPath(path);
+if (data) {
+    var str = $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js;
+    try {
+        var d = JSON.parse(str);
+        var cur = d.current || {};
+        var artist = cur.artist || "未知艺术家";
+        var title = cur.title || "未知曲目";
+        var startedAt = cur.startedAtMs || 0;
+        var duration = cur.durationSec || 0;
+        var listeners = (d.totals && d.totals.listeners) != null ? d.totals.listeners : 0;
+        artist + "\t" + title + "\t" + startedAt + "\t" + duration + "\t" + listeners;
+    } catch(e) { "" }
+} else { "" }
+EOF
 
 # ----------------- 1. 播放引擎探测 (方案1: 原生 AVPlayer / 备选: VLC) -----------------
 find_vlc() {
@@ -397,12 +418,18 @@ cleanup() {
 
     echo -e "\n\n\033[1;33m[$(date '+%H:%M:%S')] 正在停止播放并彻底回收资源...\033[0m"
 
-    # 1. 终止后台拉流守护进程
+    # 1. 终止状态拉取轮询守护进程
+    if [[ -n "$STATUS_FETCHER_PID" ]] && kill -0 "$STATUS_FETCHER_PID" 2>/dev/null; then
+        kill -TERM "$STATUS_FETCHER_PID" 2>/dev/null
+        wait "$STATUS_FETCHER_PID" 2>/dev/null
+    fi
+
+    # 2. 终止后台拉流守护进程
     if [[ -n "$CURL_PID" ]] && kill -0 "$CURL_PID" 2>/dev/null; then
         kill -9 "$CURL_PID" 2>/dev/null
     fi
 
-    # 2. 终止播放核心进程
+    # 3. 终止播放核心进程
     if [[ -n "$PLAYER_PID" ]] && kill -0 "$PLAYER_PID" 2>/dev/null; then
         # 尝试温和退出
         if [[ -S "$CTRL_SOCK" ]]; then
@@ -412,13 +439,13 @@ cleanup() {
         kill -9 "$PLAYER_PID" 2>/dev/null
     fi
 
-    # 3. 关闭写端文件描述符
+    # 4. 关闭写端文件描述符
     exec 3>&- 2>/dev/null
 
-    # 4. 彻底清理临时文件与套接字
-    rm -f "$CTRL_SOCK" "$FIFO_PATH" "$LOG_FILE" 2>/dev/null
+    # 5. 彻底清理临时文件与套接字
+    rm -f "$CTRL_SOCK" "$FIFO_PATH" "$LOG_FILE" "$STATUS_FILE" "$STATUS_RAW" "$STATUS_SCRIPT" 2>/dev/null
 
-    # 5. 恢复终端光标
+    # 6. 恢复终端光标
     tput cnorm 2>/dev/null
 
     echo -e "\033[1;32m[$(date '+%H:%M:%S')] 进程与套接字已全部清理完毕，安全退出。\033[0m"
@@ -429,18 +456,27 @@ trap cleanup INT TERM EXIT
 # 执行引擎探测
 detect_engine
 
-# ----------------- 4. 启动前交互式配置 (音频源 & IP协议) -----------------
+# ----------------- 4. 启动前交互式配置 (频道、音频源 & IP协议) -----------------
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
-    echo "用法: $0 [音频源编号 1/2] [网络协议编号 1/2/3]"
+    echo "用法: $0 [频道 1/2] [音频源 1/2] [网络协议 1/2/3]"
+    echo "  频道:   1 = 东方综合主频道 (默认 · 13万首全量随机)"
+    echo "          2 = 东方综合精选频道 (500+首人工精选)"
     echo "  音频源: 1 = 国内音频源 (默认), 2 = 国际音频源"
     echo "  协议:   1 = 强制 IPv4, 2 = 强制 IPv6, 3 = 自动双栈 (默认)"
     echo "示例:"
-    echo "  $0        # 交互式选择"
-    echo "  $0 1 3    # 国内源 + 自动双栈 (静默直接启动)"
+    echo "  $0            # 全交互式引导启动"
+    echo "  $0 1 1 3      # 主频道 + 国内源 + 自动双栈 (快速启动)"
+    echo "  $0 2 1 3      # 精选频道 + 国内源 + 自动双栈 (快速启动)"
     exit 0
 fi
 
-if [[ -n "$1" && -n "$2" ]]; then
+# 参数兼容：支持 3 参数、2 参数或无参数交互
+if [[ $# -ge 3 ]]; then
+    CHANNEL_CHOICE="$1"
+    SOURCE_CHOICE="$2"
+    USER_CHOICE="$3"
+elif [[ $# -eq 2 ]]; then
+    CHANNEL_CHOICE=1
     SOURCE_CHOICE="$1"
     USER_CHOICE="$2"
 else
@@ -449,14 +485,44 @@ else
     echo "       THMR东方网络电台流媒体播放端 (macOS 原生版)   "
     echo "         Maintainer: syameimaru-ayaya         "
     echo "=================================================="
-    echo "步骤 1/2：请选择音频源线路："
+    echo "步骤 1/3：请选择播放电台频道："
+    echo "  1) 东方音乐电台 (主频道) [全量随机 · 130,000+ 首曲目]"
+    echo "  2) 东方音乐电台 (精选频道) [人工精选 · 500+ 首优质同人曲]"
+    echo "--------------------------------------------------"
+
+    if [ -t 0 ]; then
+        read -rp "请输入选项 [1/2，直接回车默认选 1]: " CHANNEL_CHOICE
+    elif [ -r /dev/tty ] && [ -t 1 ]; then
+        read -rp "请输入选项 [1/2，直接回车默认选 1]: " CHANNEL_CHOICE < /dev/tty
+    else
+        CHANNEL_CHOICE=1
+    fi
+fi
+
+case "$CHANNEL_CHOICE" in
+    2)
+        STATION_ID="touhou-curated"
+        STATION_NAME="东方综合精选频道"
+        ;;
+    *)
+        STATION_ID="touhou"
+        STATION_NAME="东方综合主频道"
+        ;;
+esac
+
+STREAM_DOMESTIC="https://radio.zyghit.cn/radio/${STATION_ID}/320k"
+STREAM_INTERNATIONAL="https://radio.yunmoan.cn/radio/${STATION_ID}/320k"
+API_STATUS_URL="${API_BASE}/api/stations/${STATION_ID}/status"
+
+if [[ -z "$SOURCE_CHOICE" ]]; then
+    echo -e "\n已选定频道: \033[1;35m$STATION_NAME ($STATION_ID)\033[0m"
+    echo "--------------------------------------------------"
+    echo "步骤 2/3：请选择音频源线路："
     echo "  1) 国内音频源 (radio.zyghit.cn) [低延迟，国内推荐]"
     echo "  2) 国际音频源 (radio.yunmoan.cn) [海外优质节点]"
     echo "--------------------------------------------------"
 
-    if [[ -n "$1" ]]; then
-        SOURCE_CHOICE="$1"
-    elif [ -t 0 ]; then
+    if [ -t 0 ]; then
         read -rp "请输入选项 [1/2，直接回车默认选 1]: " SOURCE_CHOICE
     elif [ -r /dev/tty ] && [ -t 1 ]; then
         read -rp "请输入选项 [1/2，直接回车默认选 1]: " SOURCE_CHOICE < /dev/tty
@@ -476,11 +542,10 @@ case "$SOURCE_CHOICE" in
         ;;
 esac
 
-echo -e "\n已选定音频源: \033[1;32m$SOURCE_NAME\033[0m"
-echo "--------------------------------------------------"
-
 if [[ -z "$USER_CHOICE" ]]; then
-    echo "步骤 2/2：请选择拉流的网络协议："
+    echo -e "\n已选定音频源: \033[1;32m$SOURCE_NAME\033[0m"
+    echo "--------------------------------------------------"
+    echo "步骤 3/3：请选择拉流的网络协议："
     echo "  1) 强制 IPv4 (-4)"
     echo "  2) 强制 IPv6 (-6)"
     echo "  3) 自动双栈 (由系统调度)"
@@ -510,11 +575,13 @@ case "$USER_CHOICE" in
         ;;
 esac
 
-echo -e "\n已选定配置: \033[1;32m$SOURCE_NAME\033[0m | 模式: \033[1;32m$IP_NAME\033[0m"
+echo -e "\n已选定配置:"
+echo -e "  频道: \033[1;35m$STATION_NAME ($STATION_ID)\033[0m"
+echo -e "  线路: \033[1;32m$SOURCE_NAME\033[0m | 模式: \033[1;32m$IP_NAME\033[0m"
 if [[ "$PLAYER_BACKEND" == "native" ]]; then
-    echo -e "核心播放引擎: \033[1;36mmacOS 原生 AVPlayer 引擎 (方案1 - 零外部依赖)\033[0m"
+    echo -e "  引擎: \033[1;36mmacOS 原生 AVPlayer 引擎 (方案1 - 零外部依赖)\033[0m"
 else
-    echo -e "核心播放引擎: \033[1;36mVLC 引擎 ($VLC_BIN)\033[0m"
+    echo -e "  引擎: \033[1;36mVLC 引擎 ($VLC_BIN)\033[0m"
 fi
 echo "=================================================="
 echo "操作提示："
@@ -523,12 +590,17 @@ echo "  [Space] / [p] 暂停/播放  [m] 静音切换"
 echo "  [q] 退出播放          [Ctrl+C] 强制退出"
 echo "=================================================="
 
-# ----------------- 5. 启动播放引擎 -----------------
+# ----------------- 5. 启动播放引擎与后台状态监控 -----------------
 rm -f "$CTRL_SOCK" "$FIFO_PATH"
 
 send_cmd() {
     local cmd="$1"
     echo "$cmd" | nc -U "$CTRL_SOCK" 2>/dev/null
+}
+
+format_time() {
+    local s=$1
+    printf "%02d:%02d" $((s / 60)) $((s % 60))
 }
 
 render_vol_bar() {
@@ -540,6 +612,38 @@ render_vol_bar() {
     for ((j = 0; j < filled; j++)); do bar+="█"; done
     for ((j = 0; j < empty; j++)); do bar+="░"; done
     echo -ne "\r\033[K\033[1;36m[$(date '+%H:%M:%S')] 音量: [${bar}] ${vol}%\033[0m"
+}
+
+render_track_bar() {
+    local artist="$1"
+    local title="$2"
+    local pos=$3
+    local dur=$4
+    local listeners=$5
+
+    local pos_str=$(format_time "$pos")
+    local dur_str=$(format_time "$dur")
+
+    local width=12
+    local pct=0
+    if [[ $dur -gt 0 ]]; then
+        pct=$((pos * 100 / dur))
+    fi
+    [[ $pct -gt 100 ]] && pct=100
+    [[ $pct -lt 0 ]] && pct=0
+
+    local filled=$((pct * width / 100))
+    local empty=$((width - filled))
+    local bar=""
+    for ((j = 0; j < filled; j++)); do bar+="█"; done
+    for ((j = 0; j < empty; j++)); do bar+="░"; done
+
+    local track="${artist} - ${title}"
+    if [[ ${#track} -gt 32 ]]; then
+        track="${track:0:29}..."
+    fi
+
+    echo -ne "\r\033[K\033[1;35m🎵 ${track}\033[0m \033[36m[${pos_str}/${dur_str}]\033[0m \033[32m[${bar}]\033[0m \033[33m🎧 ${listeners}人\033[0m"
 }
 
 if [[ "$PLAYER_BACKEND" == "native" ]]; then
@@ -606,9 +710,29 @@ if [[ ! -S "$CTRL_SOCK" ]]; then
     cleanup
 fi
 
-echo -e "\033[1;32m[$(date '+%H:%M:%S')] 播放已就绪，正在实时播放中...\033[0m\n"
+echo -e "\033[1;32m[$(date '+%H:%M:%S')] 播放已就绪，正在获取当前曲目信息...\033[0m\n"
 
-# ----------------- 6. 前台热键监听循环 -----------------
+# ----------------- 6. 启动后台曲目状态轮询进程 -----------------
+status_fetcher() {
+    while true; do
+        if curl -sS --max-time 4 "$API_STATUS_URL" > "$STATUS_RAW" 2>/dev/null; then
+            local parsed
+            parsed=$(osascript -l JavaScript "$STATUS_SCRIPT" "$STATUS_RAW" 2>/dev/null)
+            if [[ -n "$parsed" ]]; then
+                echo "$parsed" > "$STATUS_FILE"
+            fi
+        fi
+        sleep 5
+    done
+}
+status_fetcher &
+STATUS_FETCHER_PID=$!
+
+# ----------------- 7. 前台热键监听与实时进度刷新循环 -----------------
+SHOW_VOL_UNTIL=0
+IS_PAUSED=0
+IS_MUTED=0
+
 while true; do
     # 检查播放进程存活
     if ! kill -0 "$PLAYER_PID" 2>/dev/null; then
@@ -647,6 +771,7 @@ while true; do
                     send_cmd "volup 2"
                     echo -ne "\r\033[K\033[1;36m[$(date '+%H:%M:%S')] 音量 +2\033[0m"
                 fi
+                SHOW_VOL_UNTIL=$(( $(date +%s) + 2 ))
                 ;;
             -|_)
                 if [[ "$PLAYER_BACKEND" == "native" ]]; then
@@ -657,27 +782,35 @@ while true; do
                     send_cmd "voldown 2"
                     echo -ne "\r\033[K\033[1;36m[$(date '+%H:%M:%S')] 音量 -2\033[0m"
                 fi
+                SHOW_VOL_UNTIL=$(( $(date +%s) + 2 ))
                 ;;
             " "|p|P)
                 if [[ "$PLAYER_BACKEND" == "native" ]]; then
                     resp=$(send_cmd "toggle")
                     if [[ "$resp" == *"PAUSED"* ]]; then
+                        IS_PAUSED=1
                         echo -ne "\r\033[K\033[1;33m[$(date '+%H:%M:%S')] ⏸ 播放已暂停 (按 Space 或 P 恢复)\033[0m"
                     else
-                        echo -ne "\r\033[K\033[1;32m[$(date '+%H:%M:%S')] ▶ 正在实时播放中...\033[0m"
+                        IS_PAUSED=0
                     fi
                 else
                     send_cmd "pause"
-                    echo -ne "\r\033[K\033[1;33m[$(date '+%H:%M:%S')] 暂停/播放状态已切换\033[0m"
+                    if [[ $IS_PAUSED -eq 0 ]]; then
+                        IS_PAUSED=1
+                        echo -ne "\r\033[K\033[1;33m[$(date '+%H:%M:%S')] ⏸ 播放已暂停 (按 Space 或 P 恢复)\033[0m"
+                    else
+                        IS_PAUSED=0
+                    fi
                 fi
                 ;;
             m|M)
                 if [[ "$PLAYER_BACKEND" == "native" ]]; then
                     resp=$(send_cmd "mute")
                     if [[ "$resp" == *"MUTED"* ]]; then
+                        IS_MUTED=1
                         echo -ne "\r\033[K\033[1;31m[$(date '+%H:%M:%S')] 🔇 已静音 (按 M 恢复)\033[0m"
                     else
-                        echo -ne "\r\033[K\033[1;32m[$(date '+%H:%M:%S')] 🔊 已恢复声音\033[0m"
+                        IS_MUTED=0
                     fi
                 fi
                 ;;
@@ -686,6 +819,21 @@ while true; do
                 break
                 ;;
         esac
+    fi
+
+    # 实时刷新曲目元数据与进度条 (当未在调节音量、且未处于暂停/静音提示状态时)
+    now_epoch=$(date +%s)
+    if [[ $now_epoch -ge $SHOW_VOL_UNTIL && $IS_PAUSED -eq 0 && $IS_MUTED -eq 0 ]]; then
+        if [[ -f "$STATUS_FILE" && -s "$STATUS_FILE" ]]; then
+            IFS=$'\t' read -r cur_artist cur_title cur_started_ms cur_dur cur_listeners < "$STATUS_FILE"
+            if [[ -n "$cur_title" && "$cur_title" != "未知曲目" ]]; then
+                started_sec=$((cur_started_ms / 1000))
+                pos=$((now_epoch - started_sec))
+                [[ $pos -lt 0 ]] && pos=0
+                [[ $cur_dur -gt 0 && $pos -gt $cur_dur ]] && pos=$cur_dur
+                render_track_bar "$cur_artist" "$cur_title" "$pos" "$cur_dur" "$cur_listeners"
+            fi
+        fi
     fi
 done
 
