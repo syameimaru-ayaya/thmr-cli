@@ -145,6 +145,7 @@ Once the stream starts, control playback directly in the terminal (**no Enter ke
 | `-` or `_` | **Volume Down** | Decreases volume (-5% with visual volume bar on macOS; -2% on Linux) |
 | `Space` or `p` | **Pause / Resume** | Toggle playback pause/resume (macOS exclusive) |
 | `m` or `M` | **Mute Toggle** | Toggle audio mute (macOS exclusive) |
+| `f` or `r` | **Track Feedback** | Report non-Touhou/audio glitch, triggers auto-skip at 5 feedbacks (macOS exclusive) |
 | `q` or `Q` | **Graceful Quit** | Terminates streaming and cleans up all processes |
 | `Ctrl + C` | **Force Interruption** | Safely triggers cleanup trap and exits |
 

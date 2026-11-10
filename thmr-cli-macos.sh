@@ -587,7 +587,7 @@ echo "=================================================="
 echo "操作提示："
 echo "  [+] / [=] 增加音量    [-] / [_] 降低音量"
 echo "  [Space] / [p] 暂停/播放  [m] 静音切换"
-echo "  [q] 退出播放          [Ctrl+C] 强制退出"
+echo "  [f] / [r] 曲目反馈    [q] 退出播放"
 echo "=================================================="
 
 # ----------------- 5. 启动播放引擎与后台状态监控 -----------------
@@ -644,6 +644,142 @@ render_track_bar() {
     fi
 
     echo -ne "\r\033[K\033[1;35m🎵 ${track}\033[0m \033[36m[${pos_str}/${dur_str}]\033[0m \033[32m[${bar}]\033[0m \033[33m🎧 ${listeners}人\033[0m"
+}
+
+CONTACT_CACHE_FILE="$CACHE_DIR/contact"
+
+handle_feedback() {
+    tput cnorm 2>/dev/null
+    echo -e "\n"
+    echo "=================================================="
+    local track_info="当前播放曲目"
+    if [[ -f "$STATUS_FILE" && -s "$STATUS_FILE" ]]; then
+        IFS=$'\t' read -r cur_artist cur_title _ _ _ < "$STATUS_FILE"
+        [[ -n "$cur_title" && "$cur_title" != "未知曲目" ]] && track_info="${cur_artist} - ${cur_title}"
+    fi
+    echo -e "\033[1;36m[曲目反馈]\033[0m 当前曲目: \033[1;35m${track_info}\033[0m"
+    echo "请选择反馈问题类型："
+    echo "  1) 非东方歌曲 (non-touhou)"
+    echo "  2) 音频损坏 / 播放异常 (playback)"
+    echo "  3) 标签错误 / 歌名有误 (metadata)"
+    echo "  4) 非音乐 / 空白音频 (non-music)"
+    echo "  5) 版权投诉 / 内容违规 (violation)"
+    echo "  6) 其他问题 (other)"
+    echo "  0) 取消返回"
+    echo "--------------------------------------------------"
+
+    local type_choice=""
+    if [ -t 0 ]; then
+        read -rp "请输入类型编号 [1-6, 0 取消, 默认 1]: " type_choice
+    elif [ -r /dev/tty ]; then
+        read -rp "请输入类型编号 [1-6, 0 取消, 默认 1]: " type_choice < /dev/tty
+    else
+        type_choice=0
+    fi
+
+    [[ -z "$type_choice" ]] && type_choice=1
+
+    local fb_type=""
+    case "$type_choice" in
+        1) fb_type="non-touhou" ;;
+        2) fb_type="playback" ;;
+        3) fb_type="metadata" ;;
+        4) fb_type="non-music" ;;
+        5) fb_type="violation" ;;
+        6) fb_type="other" ;;
+        0|q|Q)
+            echo -e "\033[1;33m已取消反馈，继续播放。\033[0m"
+            sleep 1
+            return 0
+            ;;
+        *)
+            echo -e "\033[1;31m输入无效，已取消反馈。\033[0m"
+            sleep 1
+            return 0
+            ;;
+    esac
+
+    # 联系方式 (优先读取本地缓存，留空使用默认)
+    local default_contact="thmr-cli-user"
+    if [[ -f "$CONTACT_CACHE_FILE" ]]; then
+        default_contact=$(cat "$CONTACT_CACHE_FILE" 2>/dev/null)
+        [[ -z "$default_contact" ]] && default_contact="thmr-cli-user"
+    fi
+
+    local fb_contact=""
+    if [ -t 0 ]; then
+        read -rp "请输入联系方式 (留空默认 [$default_contact]): " fb_contact
+    elif [ -r /dev/tty ]; then
+        read -rp "请输入联系方式 (留空默认 [$default_contact]): " fb_contact < /dev/tty
+    fi
+    [[ -z "$fb_contact" ]] && fb_contact="$default_contact"
+
+    # 写入缓存文件
+    mkdir -p "$CACHE_DIR"
+    echo "$fb_contact" > "$CONTACT_CACHE_FILE"
+
+    # 补充说明 (可选)
+    local fb_msg=""
+    if [ -t 0 ]; then
+        read -rp "请输入补充说明 (可选，直接回车跳过): " fb_msg
+    elif [ -r /dev/tty ]; then
+        read -rp "请输入补充说明 (可选，直接回车跳过): " fb_msg < /dev/tty
+    fi
+
+    echo -e "\033[1;34m正在提交反馈到服务端...\033[0m"
+
+    local payload
+    payload=$(osascript -l JavaScript -e '
+        function run(argv) {
+            return JSON.stringify({
+                type: argv[0],
+                contact: argv[1],
+                message: argv[2],
+                pageUrl: "thmr-cli-macos"
+            });
+        }
+    ' "$fb_type" "$fb_contact" "$fb_msg" 2>/dev/null)
+
+    local resp
+    resp=$(curl -sS -X POST "${API_BASE}/api/stations/${STATION_ID}/feedback" \
+        -H "Content-Type: application/json" \
+        -d "$payload" 2>/dev/null)
+
+    local fb_result
+    fb_result=$(osascript -l JavaScript -e '
+        function run(argv) {
+            try {
+                var d = JSON.parse(argv[0]);
+                if (d.ok) {
+                    var count = d.feedbackCountForTrack || 1;
+                    var thresh = d.autoSkipThreshold || 5;
+                    var autoSkip = d.autoSkipRequested ? "1" : "0";
+                    return "OK\t" + (d.feedbackId || "") + "\t" + count + "\t" + thresh + "\t" + autoSkip;
+                } else {
+                    return "ERR\t" + (d.error || "未知错误");
+                }
+            } catch(e) {
+                return "ERR\t解析响应失败";
+            }
+        }
+    ' "$resp" 2>/dev/null)
+
+    local res_status="" res_id="" res_count="" res_thresh="" res_skip=""
+    IFS=$'\t' read -r res_status res_id res_count res_thresh res_skip <<< "$fb_result"
+
+    if [[ "$res_status" == "OK" ]]; then
+        echo -e "\033[1;32m[反馈提交成功] 反馈编号: $res_id\033[0m"
+        echo -e "当前曲目累计反馈数: \033[1;33m${res_count}/${res_thresh}\033[0m (达到 ${res_thresh} 条时服务端将自动切歌)"
+        if [[ "$res_skip" == "1" ]]; then
+            echo -e "\033[1;36m[提示] 该曲目累计反馈已触发阈值，服务端将自动跳过此曲！\033[0m"
+        fi
+    else
+        echo -e "\033[1;31m[反馈提交失败] ${res_id:-$resp}\033[0m"
+    fi
+
+    echo "--------------------------------------------------"
+    echo -e "正在恢复播放显示...\n"
+    sleep 2
 }
 
 if [[ "$PLAYER_BACKEND" == "native" ]]; then
@@ -813,6 +949,9 @@ while true; do
                         IS_MUTED=0
                     fi
                 fi
+                ;;
+            f|F|r|R)
+                handle_feedback
                 ;;
             q|Q)
                 echo -e "\n\033[1;33m用户请求退出...\033[0m"
