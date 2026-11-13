@@ -51,9 +51,10 @@ Crafted for Linux terminal lovers, developers, headless workstations, and minima
 | Dependency | Purpose | Minimum Version |
 | :--- | :--- | :--- |
 | **Bash** | Script execution shell | 4.0+ |
-| **curl** | High-performance audio streaming | Any standard release |
+| **curl** | High-performance audio streaming & API calls | Any standard release |
 | **vlc** (`cvlc`) | Audio decoding & playback engine | VLC 3.x+ |
 | **socat** or **nc** | UNIX domain socket IPC controller | Either one |
+| **jq** or **python3** | JSON parsing for live track status & feedback submission | Either one |
 
 > [!TIP]
 > **Automatic Dependency Installation**: On **Debian/Ubuntu** or **RHEL/CentOS/Fedora/Rocky/AlmaLinux**, the script will automatically detect missing packages and offer to install them via `sudo`.
@@ -116,19 +117,18 @@ chmod +x thmr-cli-macos.sh
 
 When prompted upon startup:
 
-1. **Select Radio Channel** *(macOS)*:
-   - `1`: Touhou Main Channel (`touhou`) [Full random · 130,000+ tracks]
-   - `2`: Touhou Curated Channel (`touhou-curated`) [Hand-picked · 500+ tracks]
+1. **Select Radio Channel**:
+   - The Linux client dynamically fetches enabled channels, track counts, and listener counts from the backend (`/api/channels` & `/api/stations`) on startup (automatically falling back to built-in `touhou` / `touhou-curated` defaults if offline or timed out)
+   - Enter an index (`1..N`) or a channel ID (e.g., `touhou`, `touhou-curated`)
    - *(Press Enter to select `1` by default)*
 2. **Select Streaming Route**:
    - `1`: Domestic Server (`radio.zyghit.cn`) [Recommended for Mainland China]
    - `2`: International Server (`radio.yunmoan.cn`) [Global node]
    - *(Press Enter to select `1` by default)*
-3. **Select Audio Bitrate Profile** *(macOS)*:
-   - `1`: 320 kbps [High quality, default]
-   - `2`: 128 kbps [Standard quality, bandwidth saver]
-   - `3`: 96 kbps  [Low bitrate, weak network / cellular / campus friendly]
-   - *(Press Enter to select `1` by default)*
+3. **Select Audio Bitrate Profile**:
+   - The Linux client dynamically lists enabled bitrate profiles for the chosen station sorted from highest to lowest (typically `320k`, `128k`, `96k`, etc.; falls back to default profiles when unavailable)
+   - Enter an index (`1..M`) or a bitrate ID (e.g., `128k`)
+   - *(Press Enter to select `1`, highest quality, by default)*
 4. **Select IP Protocol**:
    - `1`: Force IPv4 (`-4`)
    - `2`: Force IPv6 (`-6`)
@@ -136,9 +136,10 @@ When prompted upon startup:
    - *(Press Enter to select `3` by default)*
 
 > [!TIP]
-> **macOS Quick Launch**: Arguments can be passed directly to skip interactive prompts:
-> - `./thmr-cli-macos.sh 1 1 1 3` (Main station + Domestic source + 320k + Dual-Stack)
-> - `./thmr-cli-macos.sh 2 1 2 3` (Curated station + Domestic source + 128k + Dual-Stack)
+> **Quick Launch**: Arguments can be passed directly to skip interactive prompts (the Linux client accepts either indices or channel/bitrate IDs):
+> - `./thmr-cli-linux.sh 1 1 1 3` (1st channel + Domestic source + Highest quality + Dual-Stack)
+> - `./thmr-cli-linux.sh touhou-curated 1 128k 3` (Launch directly by channel ID and bitrate ID)
+> - `./thmr-cli-macos.sh 1 1 1 3` (macOS native quick launch)
 
 #### Hotkeys during Playback
 
@@ -146,12 +147,12 @@ Once the stream starts, control playback directly in the terminal (**no Enter ke
 
 | Key | Action | Description |
 | :---: | :--- | :--- |
-| `+` or `=` | **Volume Up** | Increases volume (+5% with visual volume bar on macOS; +2% on Linux) |
-| `-` or `_` | **Volume Down** | Decreases volume (-5% with visual volume bar on macOS; -2% on Linux) |
-| `Space` or `p` | **Pause / Resume** | Toggle playback pause/resume (macOS exclusive) |
-| `m` or `M` | **Mute Toggle** | Toggle audio mute (macOS exclusive) |
-| `h` or `H` | **Track History** | Inspect previous track from server and recent session history (macOS exclusive) |
-| `f` or `r` | **Track Feedback** | Report non-Touhou/audio glitch, triggers auto-skip at 5 feedbacks (macOS exclusive) |
+| `+` or `=` | **Volume Up** | Increases volume (+5% on macOS / +2 steps on Linux) with visual volume bar |
+| `-` or `_` | **Volume Down** | Decreases volume (-5% on macOS / -2 steps on Linux) with visual volume bar |
+| `Space` or `p` | **Pause / Resume** | Toggle playback pause/resume |
+| `m` or `M` | **Mute Toggle** | Toggle audio mute |
+| `h` or `H` | **Track History** | Inspect previous track from server and recent session history |
+| `f` or `r` | **Track Feedback** | Report non-Touhou/audio glitch, triggers auto-skip at 5 feedbacks |
 | `q` or `Q` | **Graceful Quit** | Terminates streaming and cleans up all processes |
 | `Ctrl + C` | **Force Interruption** | Safely triggers cleanup trap and exits |
 

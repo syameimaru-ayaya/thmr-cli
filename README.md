@@ -55,9 +55,10 @@
 | 工具名称 | 用途说明 | 最低要求 |
 | :--- | :--- | :--- |
 | **Bash** | 脚本运行环境 | 4.0+ |
-| **curl** | 负责高并发流媒体拉流与协议封装 | 任何主流版本 |
+| **curl** | 负责高并发流媒体拉流与 API 请求 | 任何主流版本 |
 | **vlc** (`cvlc`) | 核心无头音频解码与播放后端 | VLC 3.x+ |
 | **socat** 或 **nc** (`netcat`) | 用于与 VLC UNIX 控制套接字进行 IPC 通信 | 二选一即可 |
+| **jq** 或 **python3** | 解析电台实时状态 JSON 与构建曲目反馈请求 | 二选一即可 |
 
 > [!TIP]
 > **自动依赖安装支持**：如果使用 **Debian/Ubuntu/Deepin/Kali** 或 **RHEL/CentOS/Fedora/Rocky Linux/AlmaLinux**，脚本会在首次启动时自动探测并提示通过 `sudo` 安装缺失的依赖软件包。
@@ -120,19 +121,18 @@ chmod +x thmr-cli-macos.sh
 
 启动脚本后，根据终端提示进行简易配置：
 
-1. **选择播放电台频道** *(macOS)*：
-   - `1`: 东方音乐电台 (主频道) [全量随机 · 130,000+ 首曲目]
-   - `2`: 东方音乐电台 (精选频道) [人工精选 · 500+ 首优质同人曲]
+1. **选择播放电台频道**：
+   - Linux 版启动时会自动从服务端（`/api/channels` 与 `/api/stations`）拉取最新启用频道、曲目数与实时听众数（离线或超时时自动回退至内置的 `touhou` / `touhou-curated` 默认列表）
+   - 输入序号（`1..N`）或直接输入频道 ID（如 `touhou`、`touhou-curated`）选择频道
    - *（直接回车默认选择 `1`）*
 2. **选择音频源线路**：
    - `1`: 国内音频源 (`radio.zyghit.cn`) [低延迟，国内网络推荐]
    - `2`: 国际音频源 (`radio.yunmoan.cn`) [海外节点]
    - *（直接回车默认选择 `1`）*
-3. **选择音频码率档案** *(macOS)*：
-   - `1`: 320 kbps [极高音质，默认推荐]
-   - `2`: 128 kbps [标准音质，节省流量]
-   - `3`: 96 kbps [轻量低码率，弱网/校园网防卡顿]
-   - *（直接回车默认选择 `1`）*
+3. **选择音频码率档案**：
+   - Linux 版按所选频道服务端返回的可用码率动态列表（按码率从高到低排序，通常包含 `320k`、`128k`、`96k` 等；无数据时回退默认档位）
+   - 支持输入序号（`1..M`）或码率 ID（如 `128k`）
+   - *（直接回车默认选择 `1` 最高音质）*
 4. **选择网络协议**：
    - `1`: 强制 IPv4
    - `2`: 强制 IPv6
@@ -140,9 +140,10 @@ chmod +x thmr-cli-macos.sh
    - *（直接回车默认选择 `3`）*
 
 > [!TIP]
-> **macOS 快速启动命令**：支持传参跳过交互直接播放，例如：
-> - `./thmr-cli-macos.sh 1 1 1 3` （主频道 + 国内源 + 320k + 自动双栈）
-> - `./thmr-cli-macos.sh 2 1 2 3` （精选频道 + 国内源 + 128k + 自动双栈）
+> **快速启动命令**：支持传参跳过交互直接播放（Linux 版同时支持序号或频道/码率 ID），例如：
+> - `./thmr-cli-linux.sh 1 1 1 3` （第 1 个频道 + 国内源 + 最高音质 + 自动双栈）
+> - `./thmr-cli-linux.sh touhou-curated 1 128k 3` （按频道 ID 与码率 ID 直接启动）
+> - `./thmr-cli-macos.sh 1 1 1 3` （macOS 原生版快速启动）
 
 #### 实时快捷键
 
@@ -150,12 +151,12 @@ chmod +x thmr-cli-macos.sh
 
 | 按键 | 功能 | 说明 |
 | :---: | :--- | :--- |
-| `+` 或 `=` | **音量增加** | 音量单次递增 5%（Linux 为 +2）并提供动态音量条 |
-| `-` 或 `_` | **音量减少** | 音量单次递减 5%（Linux 为 -2）并提供动态音量条 |
-| `Space` 或 `p` | **暂停/恢复** | 临时暂停或继续音频流播放 (macOS 专属) |
-| `m` 或 `M` | **静音切换** | 快速开启/关闭声音静音 (macOS 专属) |
-| `h` 或 `H` | **曲目回溯查询** | 查看服务端记录的上一首播放曲目及本次收听历史 (macOS 专属) |
-| `f` 或 `r` | **曲目反馈** | 提交非东方曲目/音质损坏报错，满 5 次触发自动切歌 (macOS 专属) |
+| `+` 或 `=` | **音量增加** | 音量递增（macOS +5% / Linux +2 步进）并提供动态音量条 |
+| `-` 或 `_` | **音量减少** | 音量递减（macOS -5% / Linux -2 步进）并提供动态音量条 |
+| `Space` 或 `p` | **暂停/恢复** | 临时暂停或继续音频流播放 |
+| `m` 或 `M` | **静音切换** | 快速开启/关闭声音静音 |
+| `h` 或 `H` | **曲目回溯查询** | 查看服务端记录的上一首播放曲目及本次收听历史 |
+| `f` 或 `r` | **曲目反馈** | 提交非东方曲目/音质损坏报错，满 5 次触发自动切歌 |
 | `q` 或 `Q` | **优雅退出** | 停止播放并自动回收所有子进程与临时资源 |
 | `Ctrl + C` | **强制中断** | 触发安全清理钩子并立即退出 |
 
@@ -273,9 +274,10 @@ Crafted for Linux terminal lovers, developers, headless workstations, and minima
 | Dependency | Purpose | Minimum Version |
 | :--- | :--- | :--- |
 | **Bash** | Script execution shell | 4.0+ |
-| **curl** | High-performance audio streaming | Any standard release |
+| **curl** | High-performance audio streaming & API calls | Any standard release |
 | **vlc** (`cvlc`) | Audio decoding & playback engine | VLC 3.x+ |
 | **socat** or **nc** | UNIX domain socket IPC controller | Either one |
+| **jq** or **python3** | JSON parsing for live track status & feedback submission | Either one |
 
 > [!TIP]
 > **Automatic Dependency Installation**: On **Debian/Ubuntu** or **RHEL/CentOS/Fedora/Rocky/AlmaLinux**, the script will automatically detect missing packages and offer to install them via `sudo`.
@@ -330,15 +332,29 @@ chmod +x thmr-cli-linux.sh
 
 When prompted upon startup:
 
-1. **Select Streaming Source**:
+1. **Select Radio Channel**:
+   - The Linux client dynamically fetches enabled channels, track counts, and listener counts from the backend (`/api/channels` & `/api/stations`) on startup (automatically falling back to built-in `touhou` / `touhou-curated` defaults if offline or timed out)
+   - Enter an index (`1..N`) or a channel ID (e.g., `touhou`, `touhou-curated`)
+   - *(Press Enter to select `1` by default)*
+2. **Select Streaming Source**:
    - `1`: Domestic Server (`radio.zyghit.cn`) [Recommended for Mainland China]
    - `2`: International Server (`radio.yunmoan.cn`) [Global node]
    - *(Press Enter to select `1` by default)*
-2. **Select IP Protocol**:
+3. **Select Audio Bitrate Profile**:
+   - The Linux client dynamically lists enabled bitrate profiles for the chosen station sorted from highest to lowest (typically `320k`, `128k`, `96k`, etc.; falls back to default profiles when unavailable)
+   - Enter an index (`1..M`) or a bitrate ID (e.g., `128k`)
+   - *(Press Enter to select `1`, highest quality, by default)*
+4. **Select IP Protocol**:
    - `1`: Force IPv4 (`-4`)
    - `2`: Force IPv6 (`-6`)
    - `3`: Dual-Stack (Auto)
    - *(Press Enter to select `3` by default)*
+
+> [!TIP]
+> **Quick Launch**: Pass positional arguments to skip interactive prompts (the Linux client accepts either indices or channel/bitrate IDs):
+> - `./thmr-cli-linux.sh 1 1 1 3` (1st channel + Domestic source + Highest quality + Dual-Stack)
+> - `./thmr-cli-linux.sh touhou-curated 1 128k 3` (Launch directly by channel ID and bitrate ID)
+> - `./thmr-cli-macos.sh 1 1 1 3` (macOS native quick launch)
 
 #### Hotkeys during Playback
 
@@ -346,8 +362,12 @@ Once the stream starts, control playback directly in the terminal (**no Enter ke
 
 | Key | Action | Description |
 | :---: | :--- | :--- |
-| `+` or `=` | **Volume Up** | Increases volume by +2% |
-| `-` or `_` | **Volume Down** | Decreases volume by -2% |
+| `+` or `=` | **Volume Up** | Increases volume (+5% on macOS / +2 steps on Linux) with visual volume bar |
+| `-` or `_` | **Volume Down** | Decreases volume (-5% on macOS / -2 steps on Linux) with visual volume bar |
+| `Space` or `p` | **Pause / Resume** | Toggle playback pause/resume |
+| `m` or `M` | **Mute Toggle** | Toggle audio mute |
+| `h` or `H` | **Track History** | Inspect previous track from server and recent session history |
+| `f` or `r` | **Track Feedback** | Report non-Touhou/audio glitch, triggers auto-skip at 5 feedbacks |
 | `q` or `Q` | **Graceful Quit** | Terminates streaming and cleans up all processes |
 | `Ctrl + C` | **Force Interruption** | Safely triggers cleanup trap and exits |
 
